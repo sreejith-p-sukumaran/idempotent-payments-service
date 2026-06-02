@@ -2,9 +2,9 @@ package com.sreejith.payments.controller
 
 import com.ninjasquad.springmockk.MockkBean
 import com.sreejith.payments.domain.CreatePaymentCommand
-import com.sreejith.payments.domain.Payment
-import com.sreejith.payments.domain.PaymentStatus
-import com.sreejith.payments.service.PaymentService
+import com.sreejith.payments.domain.StoredResponse
+import com.sreejith.payments.service.IdempotencyOutcome
+import com.sreejith.payments.service.PaymentApplicationService
 import io.mockk.every
 import io.mockk.slot
 import io.mockk.verify
@@ -15,12 +15,11 @@ import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.post
-import java.time.Instant
-import java.util.UUID
 
 /**
- * Web slice test: only the controller + Spring MVC are loaded; the service is
- * a MockK mock. Verifies request validation, mapping, and the 201 response.
+ * Web slice: only the controller + Spring MVC. The application service is a
+ * MockK mock, so these tests pin down HTTP concerns — header handling,
+ * validation, and mapping an [IdempotencyOutcome] to a response.
  */
 @WebMvcTest(PaymentController::class)
 class PaymentControllerTest {
@@ -29,56 +28,82 @@ class PaymentControllerTest {
     lateinit var mockMvc: MockMvc
 
     @MockkBean
-    lateinit var paymentService: PaymentService
+    lateinit var paymentApplicationService: PaymentApplicationService
+
+    private val storedBody =
+        """{"id":"11111111-1111-1111-1111-111111111111","amount":1000,"currency":"EUR","status":"SUCCEEDED","createdAt":"2026-01-01T00:00:00Z"}"""
 
     @Test
-    fun `creates a payment and returns 201 with the stored representation`() {
-        val id = UUID.randomUUID()
+    fun `returns 201 with the stored body for a processed request`() {
         val commandSlot = slot<CreatePaymentCommand>()
-        every { paymentService.create(capture(commandSlot)) } returns Payment(
-            id = id,
-            amount = 1_000,
-            currency = "EUR",
-            status = PaymentStatus.SUCCEEDED,
-            createdAt = Instant.parse("2026-01-01T00:00:00Z"),
-        )
+        every {
+            paymentApplicationService.createPayment("key-1", capture(commandSlot))
+        } returns IdempotencyOutcome.Processed(StoredResponse(201, storedBody))
 
         mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-1") }
             contentType = MediaType.APPLICATION_JSON
             content = """{"amount":1000,"currency":"eur"}"""
         }.andExpect {
             status { isCreated() }
-            jsonPath("$.id") { value(id.toString()) }
-            jsonPath("$.amount") { value(1_000) }
+            content { contentType(MediaType.APPLICATION_JSON) }
+            jsonPath("$.id") { value("11111111-1111-1111-1111-111111111111") }
+            jsonPath("$.amount") { value(1000) }
             jsonPath("$.currency") { value("EUR") }
-            jsonPath("$.status") { value("SUCCEEDED") }
         }
 
-        // currency is normalised to upper-case before reaching the service
         assertThat(commandSlot.captured.currency).isEqualTo("EUR")
+        assertThat(commandSlot.captured.amount).isEqualTo(1000)
     }
 
     @Test
-    fun `rejects a non-positive amount with 400 and never calls the service`() {
+    fun `returns 409 when the key collides`() {
+        every { paymentApplicationService.createPayment(any(), any()) } returns IdempotencyOutcome.Conflict
+
         mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-1") }
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"amount":1000,"currency":"EUR"}"""
+        }.andExpect {
+            status { isConflict() }
+        }
+    }
+
+    @Test
+    fun `returns 400 when the Idempotency-Key header is missing`() {
+        mockMvc.post("/payments") {
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"amount":1000,"currency":"EUR"}"""
+        }.andExpect {
+            status { isBadRequest() }
+        }
+
+        verify(exactly = 0) { paymentApplicationService.createPayment(any(), any()) }
+    }
+
+    @Test
+    fun `returns 400 for a non-positive amount and never calls the service`() {
+        mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-1") }
             contentType = MediaType.APPLICATION_JSON
             content = """{"amount":0,"currency":"EUR"}"""
         }.andExpect {
             status { isBadRequest() }
         }
 
-        verify(exactly = 0) { paymentService.create(any()) }
+        verify(exactly = 0) { paymentApplicationService.createPayment(any(), any()) }
     }
 
     @Test
-    fun `rejects a malformed currency with 400`() {
+    fun `returns 400 for a malformed currency`() {
         mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-1") }
             contentType = MediaType.APPLICATION_JSON
             content = """{"amount":1000,"currency":"EURO"}"""
         }.andExpect {
             status { isBadRequest() }
         }
 
-        verify(exactly = 0) { paymentService.create(any()) }
+        verify(exactly = 0) { paymentApplicationService.createPayment(any(), any()) }
     }
 }

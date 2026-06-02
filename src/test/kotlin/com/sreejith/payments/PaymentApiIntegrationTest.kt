@@ -1,5 +1,6 @@
 package com.sreejith.payments
 
+import com.sreejith.payments.repository.IdempotencyRecordRepository
 import com.sreejith.payments.repository.PaymentRepository
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
@@ -28,14 +29,19 @@ class PaymentApiIntegrationTest {
     @Autowired
     lateinit var paymentRepository: PaymentRepository
 
+    @Autowired
+    lateinit var idempotencyRecordRepository: IdempotencyRecordRepository
+
     @BeforeEach
     fun clean() {
         paymentRepository.deleteAll()
+        idempotencyRecordRepository.deleteAll()
     }
 
     @Test
     fun `POST payments persists exactly one payment and returns it`() {
         mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "integration-key-1") }
             contentType = MediaType.APPLICATION_JSON
             content = """{"amount":2500,"currency":"usd"}"""
         }.andExpect {
