@@ -1,5 +1,6 @@
 package com.sreejith.payments.service
 
+import com.sreejith.payments.domain.IdempotencyStatus
 import com.sreejith.payments.domain.StoredResponse
 import org.springframework.dao.DataIntegrityViolationException
 import org.springframework.stereotype.Service
@@ -24,14 +25,27 @@ class IdempotencyService(
         try {
             transactions.claim(key, requestHash, Instant.now(clock))
         } catch (_: DataIntegrityViolationException) {
-            // Someone already claimed this key. Phase 2 reports a flat conflict;
-            // later phases read the existing row and decide replay vs 409 vs 422.
-            return IdempotencyOutcome.Conflict
+            // Someone already claimed this key: read their row and decide.
+            return resolveExisting(key)
         }
 
         // We own the key. Do the work, then persist its response (phase C).
         val response = work()
         transactions.complete(key, response, Instant.now(clock))
         return IdempotencyOutcome.Processed(response)
+    }
+
+    private fun resolveExisting(key: String): IdempotencyOutcome {
+        // The row could be swept by expiry between the failed insert and this
+        // read; if so, treat it as a transient conflict and let the client retry.
+        val record = transactions.find(key) ?: return IdempotencyOutcome.Conflict
+
+        return when (record.status) {
+            IdempotencyStatus.COMPLETED ->
+                record.storedResponse()
+                    ?.let { IdempotencyOutcome.Replayed(it) }
+                    ?: IdempotencyOutcome.Conflict
+            IdempotencyStatus.IN_PROGRESS -> IdempotencyOutcome.Conflict
+        }
     }
 }

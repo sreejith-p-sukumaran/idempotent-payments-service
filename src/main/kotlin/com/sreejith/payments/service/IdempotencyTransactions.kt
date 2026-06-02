@@ -44,6 +44,10 @@ class IdempotencyTransactions(
         return records.saveAndFlush(record)
     }
 
+    /** Read the existing record for a key (used to resolve a claim collision). */
+    @Transactional(readOnly = true)
+    fun find(key: String): IdempotencyRecord? = records.findById(key).orElse(null)
+
     /**
      * Phase C: record the captured response and flip the row to COMPLETED, in
      * its own transaction.

@@ -11,9 +11,16 @@ sealed interface IdempotencyOutcome {
     data class Processed(val response: StoredResponse) : IdempotencyOutcome
 
     /**
-     * The key was already taken. Phase 2 treats every collision as a conflict;
-     * Phases 3-5 split this into replay (COMPLETED), 409 (IN_PROGRESS), and
-     * 422 (same key, different request body).
+     * The key already exists and its work had COMPLETED; [response] is the
+     * stored response, returned verbatim so the retry is indistinguishable from
+     * the original call.
+     */
+    data class Replayed(val response: StoredResponse) : IdempotencyOutcome
+
+    /**
+     * The key exists but its work is still IN_PROGRESS — a duplicate is being
+     * processed concurrently. Maps to 409. (Phase 5 adds a separate outcome for
+     * "same key, different request body".)
      */
     data object Conflict : IdempotencyOutcome
 }

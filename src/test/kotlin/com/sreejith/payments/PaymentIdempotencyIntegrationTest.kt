@@ -59,17 +59,30 @@ class PaymentIdempotencyIntegrationTest {
     }
 
     @Test
-    fun `a duplicate key does not create a second payment`() {
-        repeat(2) {
-            mockMvc.post("/payments") {
-                headers { set("Idempotency-Key", "key-B") }
-                contentType = MediaType.APPLICATION_JSON
-                content = body
-            }
-        }
+    fun `a duplicate key replays the original response byte-for-byte`() {
+        val first = mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-B") }
+            contentType = MediaType.APPLICATION_JSON
+            content = body
+        }.andExpect { status { isCreated() } }
+            .andReturn().response
 
-        // Exactly one payment despite two identical requests — insert-wins held.
+        val second = mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-B") }
+            contentType = MediaType.APPLICATION_JSON
+            content = body
+        }.andExpect {
+            status { isCreated() }
+            header { string("Idempotent-Replayed", "true") }
+        }.andReturn().response
+
+        // The replay is indistinguishable from the original: same status, same body.
+        assertThat(second.status).isEqualTo(first.status)
+        assertThat(second.contentAsString).isEqualTo(first.contentAsString)
+        // ...and only one payment was ever created.
         assertThat(paymentRepository.count()).isEqualTo(1)
+        // The first response carried no replay header.
+        assertThat(first.getHeader("Idempotent-Replayed")).isNull()
     }
 
     @Test

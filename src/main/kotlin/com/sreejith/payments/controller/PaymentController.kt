@@ -1,6 +1,7 @@
 package com.sreejith.payments.controller
 
 import com.sreejith.payments.controller.dto.CreatePaymentRequest
+import com.sreejith.payments.domain.StoredResponse
 import com.sreejith.payments.service.IdempotencyOutcome
 import com.sreejith.payments.service.PaymentApplicationService
 import jakarta.validation.Valid
@@ -26,17 +27,27 @@ class PaymentController(
     ): ResponseEntity<String> {
         val outcome = paymentApplicationService.createPayment(idempotencyKey, request.toCommand())
         return when (outcome) {
-            is IdempotencyOutcome.Processed ->
-                ResponseEntity.status(outcome.response.httpStatus)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(outcome.response.body)
-
-            IdempotencyOutcome.Conflict ->
-                ResponseEntity.status(HttpStatus.CONFLICT).build()
+            is IdempotencyOutcome.Processed -> jsonResponse(outcome.response, replayed = false)
+            is IdempotencyOutcome.Replayed -> jsonResponse(outcome.response, replayed = true)
+            IdempotencyOutcome.Conflict -> ResponseEntity.status(HttpStatus.CONFLICT).build()
         }
+    }
+
+    /**
+     * Writes a stored response back verbatim (status + JSON body). On a replay
+     * we add an `Idempotent-Replayed` header so callers can observe it — the
+     * status code and body remain byte-identical to the original.
+     */
+    private fun jsonResponse(stored: StoredResponse, replayed: Boolean): ResponseEntity<String> {
+        val builder = ResponseEntity.status(stored.httpStatus).contentType(MediaType.APPLICATION_JSON)
+        if (replayed) {
+            builder.header(IDEMPOTENT_REPLAYED_HEADER, "true")
+        }
+        return builder.body(stored.body)
     }
 
     companion object {
         const val IDEMPOTENCY_KEY_HEADER = "Idempotency-Key"
+        const val IDEMPOTENT_REPLAYED_HEADER = "Idempotent-Replayed"
     }
 }

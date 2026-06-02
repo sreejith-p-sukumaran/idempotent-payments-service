@@ -57,6 +57,39 @@ class PaymentControllerTest {
     }
 
     @Test
+    fun `replays the stored body with the Idempotent-Replayed header`() {
+        every {
+            paymentApplicationService.createPayment("key-1", any())
+        } returns IdempotencyOutcome.Replayed(StoredResponse(201, storedBody))
+
+        mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-1") }
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"amount":1000,"currency":"EUR"}"""
+        }.andExpect {
+            status { isCreated() }
+            header { string("Idempotent-Replayed", "true") }
+            jsonPath("$.id") { value("11111111-1111-1111-1111-111111111111") }
+        }
+    }
+
+    @Test
+    fun `does not set the Idempotent-Replayed header on a fresh response`() {
+        every {
+            paymentApplicationService.createPayment(any(), any())
+        } returns IdempotencyOutcome.Processed(StoredResponse(201, storedBody))
+
+        mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-1") }
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"amount":1000,"currency":"EUR"}"""
+        }.andExpect {
+            status { isCreated() }
+            header { doesNotExist("Idempotent-Replayed") }
+        }
+    }
+
+    @Test
     fun `returns 409 when the key collides`() {
         every { paymentApplicationService.createPayment(any(), any()) } returns IdempotencyOutcome.Conflict
 
