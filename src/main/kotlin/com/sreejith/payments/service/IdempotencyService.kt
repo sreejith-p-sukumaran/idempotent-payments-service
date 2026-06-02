@@ -26,7 +26,7 @@ class IdempotencyService(
             transactions.claim(key, requestHash, Instant.now(clock))
         } catch (_: DataIntegrityViolationException) {
             // Someone already claimed this key: read their row and decide.
-            return resolveExisting(key)
+            return resolveExisting(key, requestHash)
         }
 
         // We own the key. Do the work, then persist its response (phase C).
@@ -35,10 +35,16 @@ class IdempotencyService(
         return IdempotencyOutcome.Processed(response)
     }
 
-    private fun resolveExisting(key: String): IdempotencyOutcome {
+    private fun resolveExisting(key: String, incomingHash: String): IdempotencyOutcome {
         // The row could be swept by expiry between the failed insert and this
         // read; if so, treat it as a transient conflict and let the client retry.
         val record = transactions.find(key) ?: return IdempotencyOutcome.Conflict
+
+        // Same key, different request body = client misuse. Refuse before we
+        // consider replaying someone else's result (DESIGN.md §3).
+        if (record.requestHash != incomingHash) {
+            return IdempotencyOutcome.Mismatch
+        }
 
         return when (record.status) {
             IdempotencyStatus.COMPLETED ->

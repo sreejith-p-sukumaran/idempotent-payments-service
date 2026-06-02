@@ -90,7 +90,7 @@ class PaymentControllerTest {
     }
 
     @Test
-    fun `returns a deliberate 409 with Retry-After for an in-flight duplicate`() {
+    fun `returns a deliberate 409 problem with Retry-After for an in-flight duplicate`() {
         every { paymentApplicationService.createPayment(any(), any()) } returns IdempotencyOutcome.Conflict
 
         mockMvc.post("/payments") {
@@ -100,8 +100,23 @@ class PaymentControllerTest {
         }.andExpect {
             status { isConflict() }
             header { string("Retry-After", "1") }
-            content { contentType(MediaType.APPLICATION_JSON) }
-            jsonPath("$.status") { value("in_progress") }
+            content { contentType(MediaType.APPLICATION_PROBLEM_JSON) }
+            jsonPath("$.code") { value("IN_PROGRESS") }
+        }
+    }
+
+    @Test
+    fun `returns 422 when the key was reused with a different body`() {
+        every { paymentApplicationService.createPayment(any(), any()) } returns IdempotencyOutcome.Mismatch
+
+        mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-1") }
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"amount":1000,"currency":"EUR"}"""
+        }.andExpect {
+            status { isUnprocessableEntity() }
+            content { contentType(MediaType.APPLICATION_PROBLEM_JSON) }
+            jsonPath("$.code") { value("IDEMPOTENCY_KEY_MISMATCH") }
         }
     }
 
@@ -112,19 +127,36 @@ class PaymentControllerTest {
             content = """{"amount":1000,"currency":"EUR"}"""
         }.andExpect {
             status { isBadRequest() }
+            jsonPath("$.code") { value("MISSING_IDEMPOTENCY_KEY") }
         }
 
         verify(exactly = 0) { paymentApplicationService.createPayment(any(), any()) }
     }
 
     @Test
-    fun `returns 400 for a non-positive amount and never calls the service`() {
+    fun `returns 400 when the Idempotency-Key header is blank`() {
+        mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "   ") }
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"amount":1000,"currency":"EUR"}"""
+        }.andExpect {
+            status { isBadRequest() }
+            jsonPath("$.code") { value("MISSING_IDEMPOTENCY_KEY") }
+        }
+
+        verify(exactly = 0) { paymentApplicationService.createPayment(any(), any()) }
+    }
+
+    @Test
+    fun `returns 400 with field errors for a non-positive amount and never calls the service`() {
         mockMvc.post("/payments") {
             headers { set("Idempotency-Key", "key-1") }
             contentType = MediaType.APPLICATION_JSON
             content = """{"amount":0,"currency":"EUR"}"""
         }.andExpect {
             status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_FAILED") }
+            jsonPath("$.errors.amount") { exists() }
         }
 
         verify(exactly = 0) { paymentApplicationService.createPayment(any(), any()) }
@@ -138,6 +170,8 @@ class PaymentControllerTest {
             content = """{"amount":1000,"currency":"EURO"}"""
         }.andExpect {
             status { isBadRequest() }
+            jsonPath("$.code") { value("VALIDATION_FAILED") }
+            jsonPath("$.errors.currency") { exists() }
         }
 
         verify(exactly = 0) { paymentApplicationService.createPayment(any(), any()) }

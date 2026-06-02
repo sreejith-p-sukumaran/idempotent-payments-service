@@ -108,7 +108,7 @@ class PaymentIdempotencyIntegrationTest {
         }.andExpect {
             status { isConflict() }
             header { string("Retry-After", "1") }
-            jsonPath("$.status") { value("in_progress") }
+            jsonPath("$.code") { value("IN_PROGRESS") }
         }
 
         // The duplicate did NOT do the work...
@@ -117,6 +117,27 @@ class PaymentIdempotencyIntegrationTest {
         val record = idempotencyRecordRepository.findById("key-inflight").orElseThrow()
         assertThat(record.status).isEqualTo(IdempotencyStatus.IN_PROGRESS)
         assertThat(record.responseBody).isNull()
+    }
+
+    @Test
+    fun `the same key with a different body is rejected with 422`() {
+        mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-mismatch") }
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"amount":1000,"currency":"EUR"}"""
+        }.andExpect { status { isCreated() } }
+
+        mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-mismatch") }
+            contentType = MediaType.APPLICATION_JSON
+            content = """{"amount":9999,"currency":"EUR"}"""
+        }.andExpect {
+            status { isUnprocessableEntity() }
+            jsonPath("$.code") { value("IDEMPOTENCY_KEY_MISMATCH") }
+        }
+
+        // The mismatched retry neither replayed nor created a new payment.
+        assertThat(paymentRepository.count()).isEqualTo(1)
     }
 
     @Test

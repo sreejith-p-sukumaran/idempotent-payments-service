@@ -74,6 +74,21 @@ class IdempotencyServiceTest {
     }
 
     @Test
+    fun `reports a mismatch when the same key arrives with a different request body`() {
+        val existing = IdempotencyRecord(key = "key-1", requestHash = "hash-1", createdAt = now)
+            .apply { markCompleted(201, """{"stored":true}""", now) }
+        every { transactions.claim(any(), any(), any()) } throws DataIntegrityViolationException("dup")
+        every { transactions.find("key-1") } returns existing
+        val ran = booleanArrayOf(false)
+
+        val outcome = service.execute("key-1", "a-different-hash", work(ran))
+
+        assertThat(ran[0]).isFalse()
+        assertThat(outcome).isEqualTo(IdempotencyOutcome.Mismatch)
+        verify(exactly = 0) { transactions.complete(any(), any(), any()) }
+    }
+
+    @Test
     fun `reports a conflict when the record vanished after the failed insert`() {
         every { transactions.claim(any(), any(), any()) } throws DataIntegrityViolationException("dup")
         every { transactions.find("key-1") } returns null

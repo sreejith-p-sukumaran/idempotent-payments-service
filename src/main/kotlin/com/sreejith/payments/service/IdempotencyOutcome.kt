@@ -19,8 +19,14 @@ sealed interface IdempotencyOutcome {
 
     /**
      * The key exists but its work is still IN_PROGRESS — a duplicate is being
-     * processed concurrently. Maps to 409. (Phase 5 adds a separate outcome for
-     * "same key, different request body".)
+     * processed concurrently. Maps to 409.
      */
     data object Conflict : IdempotencyOutcome
+
+    /**
+     * The key exists but was first used with a *different* request body — client
+     * misuse of the idempotency key. Maps to 422; we refuse rather than return a
+     * result for a different request.
+     */
+    data object Mismatch : IdempotencyOutcome
 }
