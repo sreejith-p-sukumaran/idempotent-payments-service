@@ -23,6 +23,13 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
 
+idempotency:
+  # How long records are kept so a late retry can replay before the key is
+  # treated as fresh again, and how often the expiry sweep runs.
+  retention: ${IDEMPOTENCY_RETENTION:24h}
+  cleanup:
+    interval: ${IDEMPOTENCY_CLEANUP_INTERVAL:1h}
+
 logging:
   level:
     org.flywaydb: info

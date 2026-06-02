@@ -44,6 +44,22 @@ class IdempotencyRecordRepositoryTest {
     }
 
     @Test
+    fun `deleteExpired removes only records created before the cutoff`() {
+        records.saveAndFlush(
+            IdempotencyRecord(key = "old", requestHash = "h", createdAt = now.minusSeconds(3_600)),
+        )
+        records.saveAndFlush(
+            IdempotencyRecord(key = "fresh", requestHash = "h", createdAt = now),
+        )
+
+        val deleted = records.deleteExpired(now.minusSeconds(60))
+
+        assertThat(deleted).isEqualTo(1)
+        assertThat(records.findById("old")).isEmpty
+        assertThat(records.findById("fresh")).isPresent
+    }
+
+    @Test
     fun `rejects a second record with the same key (the insert-wins lock)`() {
         records.saveAndFlush(
             IdempotencyRecord(key = "dup", requestHash = "hash-a", createdAt = now, updatedAt = now),
