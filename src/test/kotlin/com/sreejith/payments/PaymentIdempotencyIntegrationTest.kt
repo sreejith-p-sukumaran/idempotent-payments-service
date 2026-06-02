@@ -1,8 +1,11 @@
 package com.sreejith.payments
 
+import com.sreejith.payments.domain.CreatePaymentCommand
+import com.sreejith.payments.domain.IdempotencyRecord
 import com.sreejith.payments.domain.IdempotencyStatus
 import com.sreejith.payments.repository.IdempotencyRecordRepository
 import com.sreejith.payments.repository.PaymentRepository
+import com.sreejith.payments.service.RequestHasher
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -13,6 +16,7 @@ import org.springframework.context.annotation.Import
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.MockMvc
 import org.springframework.test.web.servlet.post
+import java.time.Instant
 
 /**
  * End-to-end idempotency behaviour for Phase 2: the first request creates the
@@ -32,6 +36,9 @@ class PaymentIdempotencyIntegrationTest {
 
     @Autowired
     lateinit var idempotencyRecordRepository: IdempotencyRecordRepository
+
+    @Autowired
+    lateinit var requestHasher: RequestHasher
 
     @BeforeEach
     fun clean() {
@@ -83,6 +90,33 @@ class PaymentIdempotencyIntegrationTest {
         assertThat(paymentRepository.count()).isEqualTo(1)
         // The first response carried no replay header.
         assertThat(first.getHeader("Idempotent-Replayed")).isNull()
+    }
+
+    @Test
+    fun `an in-flight duplicate returns 409 and creates no payment`() {
+        // Simulate a first request that has claimed the key and is still mid-flight:
+        // an IN_PROGRESS row exists but the work has not completed yet.
+        val hash = requestHasher.hash(CreatePaymentCommand(amount = 1000, currency = "EUR"))
+        idempotencyRecordRepository.saveAndFlush(
+            IdempotencyRecord(key = "key-inflight", requestHash = hash, createdAt = Instant.parse("2026-01-01T00:00:00Z")),
+        )
+
+        mockMvc.post("/payments") {
+            headers { set("Idempotency-Key", "key-inflight") }
+            contentType = MediaType.APPLICATION_JSON
+            content = body
+        }.andExpect {
+            status { isConflict() }
+            header { string("Retry-After", "1") }
+            jsonPath("$.status") { value("in_progress") }
+        }
+
+        // The duplicate did NOT do the work...
+        assertThat(paymentRepository.count()).isEqualTo(0)
+        // ...and left the original's record untouched (still IN_PROGRESS).
+        val record = idempotencyRecordRepository.findById("key-inflight").orElseThrow()
+        assertThat(record.status).isEqualTo(IdempotencyStatus.IN_PROGRESS)
+        assertThat(record.responseBody).isNull()
     }
 
     @Test

@@ -90,7 +90,7 @@ class PaymentControllerTest {
     }
 
     @Test
-    fun `returns 409 when the key collides`() {
+    fun `returns a deliberate 409 with Retry-After for an in-flight duplicate`() {
         every { paymentApplicationService.createPayment(any(), any()) } returns IdempotencyOutcome.Conflict
 
         mockMvc.post("/payments") {
@@ -99,6 +99,9 @@ class PaymentControllerTest {
             content = """{"amount":1000,"currency":"EUR"}"""
         }.andExpect {
             status { isConflict() }
+            header { string("Retry-After", "1") }
+            content { contentType(MediaType.APPLICATION_JSON) }
+            jsonPath("$.status") { value("in_progress") }
         }
     }
 
